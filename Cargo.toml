@@ -1,0 +1,6 @@
+[workspace]
+
+# test
+members = [
+    "ch04",
+]
