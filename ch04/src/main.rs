@@ -1,4 +1,10 @@
-use std::{env, fs, io::{self, Write}, process};
+use std::{
+    env, fs,
+    io::{self, Write},
+    process,
+};
+
+mod lox;
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -14,7 +20,7 @@ fn main() {
 
 fn run_file(path: &str) {
     let source = fs::read_to_string(path).expect(format!("Failed to read file: {}", path).as_str());
-    run(&source);
+    run(source);
 }
 
 fn run_prompt() {
@@ -26,10 +32,23 @@ fn run_prompt() {
         if line.is_empty() {
             break;
         }
-        run(&line);
+        run(line);
     }
 }
 
-fn run(source: &str) {
-    println!("{}", source);
+fn run(source: String) {
+    let result = lox::Scanner::new(source).scan_tokens();
+
+    match result {
+        Ok(tokens) => {
+            // For now, just print the tokens.
+            for token in tokens {
+                println!("{:?}", token);
+            }
+        }
+        Err(e) => {
+            eprintln!("{}", e);
+            process::exit(65);
+        }
+    }
 }
