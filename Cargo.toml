@@ -1,6 +1,4 @@
 [workspace]
 
 # test
-members = [
-    "ch04", "ch06", "ch07", "ch08",
-]
+members = ["ch04", "ch06", "ch07", "ch08"]
