@@ -20,7 +20,7 @@ fn main() {
 
 fn run_file(path: &str) {
     let source = fs::read_to_string(path).expect(format!("Failed to read file: {}", path).as_str());
-    run(source, &mut lox::interpreter::Interpreter::new()).expect("Failed to scan tokens");
+    run(source, &mut lox::interpreter::Interpreter::new()).expect("Failed executing script");
 }
 
 fn run_prompt() {

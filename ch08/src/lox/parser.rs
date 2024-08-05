@@ -76,10 +76,23 @@ impl Parser {
 
     pub fn parse(&mut self) -> Result<Vec<Stmt>> {
         let mut statements = Vec::<Stmt>::new();
+        let mut errors = Vec::<Error>::new();
         while !self.is_at_end() {
-            statements.push(self.declaration()?);
+            let statement = self.declaration();
+            match statement {
+                Ok(stmt) => statements.push(stmt),
+                Err(err) => {
+                    errors.push(err);
+                    self.synchronize();
+                }
+            }
         }
-        Ok(statements)
+
+        if errors.is_empty() {
+            Ok(statements)
+        } else {
+            Err(anyhow::anyhow!("Parse errors: {:#?}", errors))
+        }
     }
 
     fn declaration(&mut self) -> Result<Stmt> {
@@ -293,6 +306,32 @@ impl Parser {
         match token.token_type {
             TokenType::Eof => anyhow::anyhow!("Line: {}: at end: {}", token.line, message),
             _ => anyhow::anyhow!("Line: {}: at '{}': {}", token.line, token.lexeme, message),
+        }
+    }
+
+    fn synchronize(&mut self) {
+        self.advance();
+
+        while !self.is_at_end() {
+            if self.previous().token_type == TokenType::Semicolon {
+                return;
+            }
+
+            match self.peek().token_type {
+                TokenType::Class |
+                TokenType::Fun |
+                TokenType::Var |
+                TokenType::For |
+                TokenType::If |
+                TokenType::While |
+                TokenType::Print |
+                TokenType::Return => {
+                    break;
+                }
+                _ => {}
+            }
+
+            self.advance();
         }
     }
 }
