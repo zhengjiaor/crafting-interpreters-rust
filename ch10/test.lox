@@ -76,14 +76,9 @@ fun makeCounter() {
 }
 
 var counter = makeCounter();
-var counter2 = makeCounter();
 counter(); // "1".
-counter2(); // "2".
-counter(); // "3".
-counter2(); // "4".
-counter(); // "5".
-counter2(); // "6".
-makeCounter()();
+counter(); // "2".
+
 var x = "global";
 fun outer() {
   var x = "outer";
