@@ -175,7 +175,14 @@ impl Interpreter {
             Object::Callable(LoxCallable::NativeFunction {
                 name: "clock".to_string(),
                 arity: 0,
-                function: |_| Object::Number(time::Instant::now().elapsed().as_secs_f64()),
+                function: |_| {
+                    Object::Number(
+                        time::SystemTime::now()
+                            .duration_since(time::SystemTime::UNIX_EPOCH)
+                            .map(|d| d.as_secs_f64())
+                            .unwrap_or(0.0),
+                    )
+                },
             }),
         );
         Interpreter {
