@@ -47,5 +47,5 @@ fn run(source: String, interpreter: &mut lox::interpreter::Interpreter) -> anyho
     let statements = lox::parser::Parser::new(result).parse()?;
     let mut resolver = resolver::Resolver::new(interpreter);
     resolver.resolve_stmts(&statements)?;
-    Ok(interpreter.interprete(statements)?)
+    Ok(interpreter.interpret(statements)?)
 }

@@ -192,7 +192,7 @@ impl Interpreter {
         }
     }
 
-    pub fn interprete(&mut self, statements: Vec<Stmt>) -> Result<()> {
+    pub fn interpret(&mut self, statements: Vec<Stmt>) -> Result<()> {
         for statement in &statements {
             self.execute(statement)?;
         }
