@@ -51,7 +51,7 @@ impl<'a> Resolver<'a> {
     fn visit_var_stmt(&mut self, name: &Token, initializer: &Option<Expr>) -> Result<()> {
         self.declare(name)?;
         if let Some(initializer) = initializer {
-            self.resolve_expr(initializer);
+            self.resolve_expr(initializer)?;
         }
         self.define(name);
         Ok(())
@@ -226,8 +226,7 @@ impl<'a> Resolver<'a> {
     fn resolve_local(&mut self, name: &Token) {
         for (i, scope) in self.scopes.iter().enumerate().rev() {
             if scope.contains_key(&name.lexeme) {
-                // Not implemented.
-                //self.interpreter.resolve(name, self.scopes.len() - 1 - i);
+                self.interpreter.resolve(name, self.scopes.len() - 1 - i);
             }
         }
     }

@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
-use std::time;
+use std::{env, time};
 
 use anyhow::{anyhow, Result};
 use thiserror::Error;
@@ -151,6 +151,50 @@ impl Environment {
         } else {
             Err(anyhow!("Undefined variable '{}'.", name.lexeme))
         }
+    }
+
+    fn get_at(&self, distance: usize, name: &str) -> Result<Object> {
+        if distance == 0 {
+            return self
+                .values
+                .get(name)
+                .map(|v| v.clone())
+                .ok_or_else(|| anyhow!("Undefined variable '{}'.", name));
+        }
+        self.ancestor(distance)
+            .borrow()
+            .values
+            .get(name)
+            .map(|v| v.clone())
+            .ok_or_else(|| anyhow!("Undefined variable '{}'.", name))
+    }
+
+    fn assign_at(&mut self, distance: usize, name: &Token, value: Object) -> Result<()> {
+        if distance == 0 {
+            if self.values.contains_key(name.lexeme.as_str()) {
+                self.values.insert(name.lexeme.clone(), value);
+                Ok(())
+            } else {
+                Err(anyhow!("Undefined variable '{}'.", name.lexeme))
+            }
+        } else {
+            let anc = self.ancestor(distance);
+            if anc.borrow().values.contains_key(name.lexeme.as_str()) {
+                anc.borrow_mut().values.insert(name.lexeme.clone(), value);
+                Ok(())
+            } else {
+                Err(anyhow!("Undefined variable '{}'.", name.lexeme))
+            }
+        }
+    }
+
+    fn ancestor(&self, distance: usize) -> Rc<RefCell<Environment>> {
+        let mut environment = Rc::clone(&self.enclosing.as_ref().unwrap());
+        for _ in 1..distance {
+            let enclosing = Rc::clone(&environment.borrow().enclosing.as_ref().unwrap());
+            environment = enclosing;
+        }
+        environment
     }
 }
 
@@ -316,7 +360,12 @@ impl Interpreter {
 
     fn visit_assign_expr(&mut self, name: &Token, value: &Expr) -> Result<Object> {
         let value = self.evaluate(value)?;
-        self.environment.borrow_mut().assign(&name, value.clone())?;
+        if let Some(distance) = self.locals.get(&name.index) {
+            self.environment.borrow_mut().assign_at(*distance, name, value.clone())?;
+        } else {
+            self.globals.borrow_mut().assign(name, value.clone())?;
+        }
+
         Ok(value)
     }
 
@@ -493,6 +542,14 @@ impl Interpreter {
     }
 
     fn visit_var_expr(&self, name: &Token) -> Result<Object> {
-        RefCell::borrow(self.environment.as_ref()).get(name).map(|obj| obj.clone())
+        self.lookup_variable(name)
+    }
+
+    fn lookup_variable(&self, name: &Token) -> Result<Object> {
+        if let Some(distance) = self.locals.get(&name.index) {
+            self.environment.borrow().get_at(*distance, &name.lexeme)
+        } else {
+            self.globals.borrow().get(name)
+        }
     }
 }
