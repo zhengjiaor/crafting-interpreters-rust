@@ -57,6 +57,11 @@ impl Object {
     }
 }
 
+trait Call {
+    fn arity(&self) -> usize;
+    fn call(&self, interpreter: &mut Interpreter, arguments: &Vec<Object>) -> Result<Object>;
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct NativeFunction {
     name: String,
@@ -67,6 +72,16 @@ struct NativeFunction {
 impl Display for NativeFunction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "<native fn>")
+    }
+}
+
+impl Call for NativeFunction {
+    fn arity(&self) -> usize {
+        self.arity
+    }
+
+    fn call(&self, _interpreter: &mut Interpreter, arguments: &Vec<Object>) -> Result<Object> {
+        Ok((self.function)(arguments))
     }
 }
 
@@ -89,23 +104,12 @@ impl Display for LoxFunction {
     }
 }
 
-impl LoxFunction {
-    pub fn new(
-        declaration: parser::Function,
-        closure: Rc<RefCell<Environment>>,
-        is_initializer: bool,
-    ) -> LoxFunction {
-        LoxFunction { declaration, closure, is_initializer }
+impl Call for LoxFunction {
+    fn arity(&self) -> usize {
+        self.declaration.params.len()
     }
 
-    pub fn bind(&self, instance: &Rc<RefCell<LoxInstance>>) -> LoxFunction {
-        let environment =
-            Rc::new(RefCell::new(Environment::with_enclosing(Rc::clone(&self.closure))));
-        RefCell::borrow_mut(&environment).define("this", Object::Instance(Rc::clone(instance)));
-        LoxFunction::new(self.declaration.clone(), environment, self.is_initializer)
-    }
-
-    pub fn call(&self, interpreter: &mut Interpreter, arguments: &Vec<Object>) -> Result<Object> {
+    fn call(&self, interpreter: &mut Interpreter, arguments: &Vec<Object>) -> Result<Object> {
         let environment =
             Rc::new(RefCell::new(Environment::with_enclosing(Rc::clone(&self.closure))));
         for (param, arg) in self.declaration.params.iter().zip(arguments) {
@@ -129,6 +133,23 @@ impl LoxFunction {
     }
 }
 
+impl LoxFunction {
+    pub fn new(
+        declaration: parser::Function,
+        closure: Rc<RefCell<Environment>>,
+        is_initializer: bool,
+    ) -> LoxFunction {
+        LoxFunction { declaration, closure, is_initializer }
+    }
+
+    pub fn bind(&self, instance: &Rc<RefCell<LoxInstance>>) -> LoxFunction {
+        let environment =
+            Rc::new(RefCell::new(Environment::with_enclosing(Rc::clone(&self.closure))));
+        RefCell::borrow_mut(&environment).define("this", Object::Instance(Rc::clone(instance)));
+        LoxFunction::new(self.declaration.clone(), environment, self.is_initializer)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct LoxClass {
     name: String,
@@ -141,21 +162,27 @@ impl Display for LoxClass {
     }
 }
 
-impl LoxClass {
-    pub fn find_method(&self, name: &str) -> Option<&LoxCallable> {
-        self.methods.get(name)
+impl Call for Rc<LoxClass> {
+    fn arity(&self) -> usize {
+        if let Some(LoxCallable::LoxFunction(initializer)) = self.find_method("init") {
+            initializer.declaration.params.len()
+        } else {
+            0
+        }
     }
 
-    fn call(
-        self: &Rc<Self>,
-        interpreter: &mut Interpreter,
-        arguments: &Vec<Object>,
-    ) -> Result<Object> {
+    fn call(&self, interpreter: &mut Interpreter, arguments: &Vec<Object>) -> Result<Object> {
         let instance = Rc::new(RefCell::new(LoxInstance::new(self.clone())));
         if let Some(LoxCallable::LoxFunction(initializer)) = self.find_method("init") {
             initializer.bind(&instance).call(interpreter, arguments)?;
         }
         Ok(Object::Instance(instance))
+    }
+}
+
+impl LoxClass {
+    pub fn find_method(&self, name: &str) -> Option<&LoxCallable> {
+        self.methods.get(name)
     }
 }
 
@@ -172,6 +199,24 @@ impl Display for LoxCallable {
             LoxCallable::NativeFunction(func) => write!(f, "{}", func),
             LoxCallable::LoxFunction(func) => write!(f, "{}", func),
             LoxCallable::LoxClass(klass) => write!(f, "{}", klass.as_ref()),
+        }
+    }
+}
+
+impl LoxCallable {
+    pub fn arity(&self) -> usize {
+        match self {
+            LoxCallable::NativeFunction(func) => func.arity(),
+            LoxCallable::LoxFunction(func) => func.arity(),
+            LoxCallable::LoxClass(klass) => klass.arity(),
+        }
+    }
+
+    pub fn call(&self, interpreter: &mut Interpreter, arguments: &Vec<Object>) -> Result<Object> {
+        match self {
+            LoxCallable::NativeFunction(func) => Ok((func.function)(arguments)),
+            LoxCallable::LoxFunction(func) => func.call(interpreter, arguments),
+            LoxCallable::LoxClass(klass) => klass.call(interpreter, arguments),
         }
     }
 }
@@ -208,30 +253,6 @@ impl LoxInstance {
 
     pub fn set(&mut self, name: &Token, value: Object) {
         self.fields.insert(name.lexeme.clone(), value);
-    }
-}
-
-impl LoxCallable {
-    pub fn arity(&self) -> usize {
-        match self {
-            LoxCallable::NativeFunction(func) => func.arity,
-            LoxCallable::LoxFunction(func) => func.declaration.params.len(),
-            LoxCallable::LoxClass(klass) => {
-                if let Some(LoxCallable::LoxFunction(initializer)) = klass.find_method("init") {
-                    initializer.declaration.params.len()
-                } else {
-                    0
-                }
-            }
-        }
-    }
-
-    pub fn call(&self, interpreter: &mut Interpreter, arguments: &Vec<Object>) -> Result<Object> {
-        match self {
-            LoxCallable::NativeFunction(func) => Ok((func.function)(arguments)),
-            LoxCallable::LoxFunction(func) => func.call(interpreter, arguments),
-            LoxCallable::LoxClass(klass) => klass.call(interpreter, arguments),
-        }
     }
 }
 
