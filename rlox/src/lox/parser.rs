@@ -440,10 +440,10 @@ impl Parser {
             return Ok(Expr::Literal(LiteralValue::Nil));
         }
         if self.match_type(&[TokenType::Number]) {
-            return Ok(Expr::Literal(self.previous().literal.clone()));
+            return Ok(Expr::Literal(self.previous().literal.as_ref().unwrap().clone()));
         }
         if self.match_type(&[TokenType::String]) {
-            return Ok(Expr::Literal(self.previous().literal.clone()));
+            return Ok(Expr::Literal(self.previous().literal.as_ref().unwrap().clone()));
         }
         if self.match_type(&[TokenType::This]) {
             return Ok(Expr::This(self.previous().clone()));

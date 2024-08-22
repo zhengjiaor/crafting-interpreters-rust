@@ -43,7 +43,6 @@ impl Object {
             LiteralValue::False => Object::Boolean(false),
             LiteralValue::True => Object::Boolean(true),
             LiteralValue::Nil => Object::Nil,
-            LiteralValue::None => Object::Nil,
         }
     }
 

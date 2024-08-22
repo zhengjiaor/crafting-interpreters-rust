@@ -5,7 +5,7 @@ use anyhow::Result;
 use lazy_static::lazy_static;
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TokenType {
     // Single-character tokens.
     LeftParen,
@@ -86,7 +86,6 @@ pub enum LiteralValue {
     False,
     True,
     Nil,
-    None,
 }
 
 impl Display for LiteralValue {
@@ -97,7 +96,6 @@ impl Display for LiteralValue {
             LiteralValue::False => write!(f, "false"),
             LiteralValue::True => write!(f, "true"),
             LiteralValue::Nil => write!(f, "nil"),
-            LiteralValue::None => write!(f, ""),
         }
     }
 }
@@ -106,7 +104,7 @@ impl Display for LiteralValue {
 pub struct Token {
     pub token_type: TokenType,
     pub lexeme: String,
-    pub literal: LiteralValue,
+    pub literal: Option<LiteralValue>,
     pub line: usize,
     pub index: usize,
 }
@@ -115,7 +113,7 @@ impl Token {
     pub fn new(
         token_type: TokenType,
         lexeme: String,
-        literal: LiteralValue,
+        literal: Option<LiteralValue>,
         line: usize,
         index: usize,
     ) -> Token {
@@ -151,7 +149,7 @@ impl Scanner {
         self.tokens.push(Token::new(
             TokenType::Eof,
             "".to_string(),
-            LiteralValue::None,
+            None,
             self.line,
             self.tokens.len(),
         ));
@@ -283,7 +281,7 @@ impl Scanner {
 
         // Trim the surrounding quotes.
         let value = self.source[self.start + 1..self.current - 1].to_string();
-        self.add_token_literal(TokenType::String, LiteralValue::String(value));
+        self.add_token_literal(TokenType::String, Some(LiteralValue::String(value)));
         Ok(())
     }
 
@@ -302,7 +300,7 @@ impl Scanner {
         }
 
         let number = self.source[self.start..self.current].parse::<f64>()?;
-        self.add_token_literal(TokenType::Number, LiteralValue::Number(number));
+        self.add_token_literal(TokenType::Number, Some(LiteralValue::Number(number)));
         Ok(())
     }
 
@@ -319,10 +317,10 @@ impl Scanner {
     }
 
     fn add_token(&mut self, token_type: TokenType) {
-        self.add_token_literal(token_type, LiteralValue::None);
+        self.add_token_literal(token_type, None);
     }
 
-    fn add_token_literal(&mut self, token_type: TokenType, literal: LiteralValue) {
+    fn add_token_literal(&mut self, token_type: TokenType, literal: Option<LiteralValue>) {
         let text = self.source[self.start..self.current].to_string();
         self.tokens.push(Token::new(token_type, text, literal, self.line, self.tokens.len()));
     }
