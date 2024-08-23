@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
-use crate::lox::scanner::{LiteralValue, Token};
+use anyhow::{anyhow, Result};
+
 use crate::lox::{
     interpreter::Interpreter,
     parser,
     parser::{Expr, Stmt},
+    scanner::{LiteralValue, Token, TokenType},
 };
-
-use anyhow::{anyhow, Result};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FunctionType {
@@ -29,6 +29,7 @@ pub struct Resolver<'a> {
     scopes: Vec<HashMap<String, bool>>,
     current_function: FunctionType,
     current_class: ClassType,
+    had_error: bool,
 }
 
 impl<'a> Resolver<'a> {
@@ -38,17 +39,26 @@ impl<'a> Resolver<'a> {
             scopes: Vec::new(),
             current_function: FunctionType::None,
             current_class: ClassType::None,
+            had_error: false,
         }
     }
 
-    pub fn resolve_stmts(&mut self, statements: &Vec<Stmt>) -> Result<()> {
+    pub fn resolve(&mut self, statements: &Vec<Stmt>) -> Result<()> {
+        self.resolve_stmts(statements);
+        if self.had_error {
+            Err(anyhow!("Resolver error"))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn resolve_stmts(&mut self, statements: &Vec<Stmt>) {
         for statement in statements {
-            self.resolve_stmt(statement)?;
+            self.resolve_stmt(statement);
         }
-        Ok(())
     }
 
-    fn resolve_stmt(&mut self, statement: &Stmt) -> Result<()> {
+    fn resolve_stmt(&mut self, statement: &Stmt) {
         match statement {
             Stmt::Var { name, initializer } => self.visit_var_stmt(name, initializer),
             Stmt::Function(func) => self.visit_funtion_stmt(func),
@@ -66,40 +76,38 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn visit_var_stmt(&mut self, name: &Token, initializer: &Option<Expr>) -> Result<()> {
-        self.declare(name)?;
+    fn visit_var_stmt(&mut self, name: &Token, initializer: &Option<Expr>) {
+        self.declare(name);
         if let Some(initializer) = initializer {
-            self.resolve_expr(initializer)?;
+            self.resolve_expr(initializer);
         }
         self.define(name);
-        Ok(())
     }
 
-    fn visit_funtion_stmt(&mut self, func: &parser::Function) -> Result<()> {
-        self.declare(&func.name)?;
+    fn visit_funtion_stmt(&mut self, func: &parser::Function) {
+        self.declare(&func.name);
         self.define(&func.name);
         self.resolve_function(func, FunctionType::Function)
     }
 
-    fn resolve_function(&mut self, func: &parser::Function, func_type: FunctionType) -> Result<()> {
+    fn resolve_function(&mut self, func: &parser::Function, func_type: FunctionType) {
         let enclosing_function = self.current_function;
         self.current_function = func_type;
 
         let result = || -> Result<()> {
             self.begin_scope();
             for param in &func.params {
-                self.declare(param)?;
+                self.declare(param);
                 self.define(param);
             }
-            self.resolve_stmts(&func.body)?;
+            self.resolve_stmts(&func.body);
             self.end_scope();
             Ok(())
         }();
         self.current_function = enclosing_function;
-        result
     }
 
-    fn visit_expression_stmt(&mut self, expr: &Expr) -> Result<()> {
+    fn visit_expression_stmt(&mut self, expr: &Expr) {
         self.resolve_expr(expr)
     }
 
@@ -108,44 +116,41 @@ impl<'a> Resolver<'a> {
         condition: &Expr,
         then_branch: &Stmt,
         else_branch: &Option<Box<Stmt>>,
-    ) -> Result<()> {
-        self.resolve_expr(condition)?;
-        self.resolve_stmt(then_branch)?;
+    ) {
+        self.resolve_expr(condition);
+        self.resolve_stmt(then_branch);
         if let Some(else_branch) = else_branch {
-            self.resolve_stmt(else_branch)?;
+            self.resolve_stmt(else_branch);
         }
-        Ok(())
     }
 
-    fn visit_print_stmt(&mut self, expr: &Expr) -> Result<()> {
+    fn visit_print_stmt(&mut self, expr: &Expr) {
         self.resolve_expr(expr)
     }
 
-    fn visit_return_stmt(&mut self, _keyword: &Token, value: &Option<Expr>) -> Result<()> {
+    fn visit_return_stmt(&mut self, keyword: &Token, value: &Option<Expr>) {
         if self.current_function == FunctionType::None {
-            return Err(anyhow!("Cannot return from top-level code"));
+            self.error(keyword, "Can't return from top-level code.");
         }
 
         if let Some(value) = value {
             if self.current_function == FunctionType::Initializer {
-                return Err(anyhow!("Cannot return a value from an initializer"));
+                self.error(keyword, "Can't return a value from an initializer.");
             }
 
-            self.resolve_expr(value)?;
+            self.resolve_expr(value);
         }
-        Ok(())
     }
 
-    fn visit_while_stmt(&mut self, condition: &Expr, body: &Stmt) -> Result<()> {
-        self.resolve_expr(condition)?;
+    fn visit_while_stmt(&mut self, condition: &Expr, body: &Stmt) {
+        self.resolve_expr(condition);
         self.resolve_stmt(body)
     }
 
-    fn visit_block_stmt(&mut self, statements: &Vec<Stmt>) -> Result<()> {
+    fn visit_block_stmt(&mut self, statements: &Vec<Stmt>) {
         self.begin_scope();
-        self.resolve_stmts(statements)?;
+        self.resolve_stmts(statements);
         self.end_scope();
-        Ok(())
     }
 
     fn visit_class_stmt(
@@ -153,22 +158,22 @@ impl<'a> Resolver<'a> {
         name: &Token,
         superclass: &Option<Expr>,
         methods: &Vec<parser::Function>,
-    ) -> Result<()> {
+    ) {
         let enclosing_class = self.current_class;
         self.current_class = ClassType::Class;
 
-        self.declare(name)?;
+        self.declare(name);
         self.define(name);
 
         if let Some(superclass) = superclass {
             if let Expr::Variable(super_name) = superclass {
                 if super_name.lexeme == name.lexeme {
-                    return Err(anyhow!("A class cannot inherit from itself."));
+                    self.error(name, "A class can't inherit from itself.");
                 }
             }
 
             self.current_class = ClassType::SubClass;
-            self.resolve_expr(superclass)?;
+            self.resolve_expr(superclass);
 
             self.begin_scope();
             self.scopes.last_mut().unwrap().insert("super".to_string(), true);
@@ -183,7 +188,7 @@ impl<'a> Resolver<'a> {
             } else {
                 FunctionType::Method
             };
-            self.resolve_function(method, func_type)?;
+            self.resolve_function(method, func_type);
         }
 
         if superclass.is_some() {
@@ -193,7 +198,6 @@ impl<'a> Resolver<'a> {
         self.end_scope();
 
         self.current_class = enclosing_class;
-        Ok(())
     }
 
     fn begin_scope(&mut self) {
@@ -204,18 +208,14 @@ impl<'a> Resolver<'a> {
         self.scopes.pop();
     }
 
-    fn declare(&mut self, name: &Token) -> Result<()> {
+    fn declare(&mut self, name: &Token) {
         if let Some(scope) = self.scopes.last_mut() {
             if scope.contains_key(&name.lexeme) {
-                return Err(anyhow!(
-                    "Already a variable with this name in this scope: {}",
-                    name.lexeme
-                ));
+                self.error(name, "Already a variable with this name in this scope.");
+                return;
             }
             scope.insert(name.lexeme.clone(), false);
         }
-
-        Ok(())
     }
 
     fn define(&mut self, name: &Token) {
@@ -224,7 +224,7 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn resolve_expr(&mut self, expr: &Expr) -> Result<()> {
+    fn resolve_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Variable(name) => self.visit_var_expr(name),
             Expr::Assign { name, value } => self.visit_assign_expr(name, value),
@@ -243,91 +243,87 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn visit_var_expr(&mut self, name: &Token) -> Result<()> {
+    fn visit_var_expr(&mut self, name: &Token) {
         if !self.scopes.is_empty() &&
             self.scopes.last().is_some() &&
             self.scopes.last().unwrap().get(&name.lexeme) == Some(&false)
         {
-            return Err(anyhow!(
-                "Cannot read local variable in its own initializer: {}",
-                name.lexeme
-            ));
+            self.error(name, "Can't read local variable in its own initializer.");
         }
 
-        Ok(self.resolve_local(name))
+        self.resolve_local(name)
     }
 
-    fn visit_assign_expr(&mut self, name: &Token, value: &Expr) -> Result<()> {
-        self.resolve_expr(value)?;
-        Ok(self.resolve_local(name))
+    fn visit_assign_expr(&mut self, name: &Token, value: &Expr) {
+        self.resolve_expr(value);
+        self.resolve_local(name)
     }
 
-    fn visit_binary_expr(&mut self, left: &Expr, _op: &Token, right: &Expr) -> Result<()> {
-        self.resolve_expr(left)?;
+    fn visit_binary_expr(&mut self, left: &Expr, _op: &Token, right: &Expr) {
+        self.resolve_expr(left);
         self.resolve_expr(right)
     }
 
-    fn visit_call_expr(
-        &mut self,
-        callee: &Expr,
-        _paren: &Token,
-        arguments: &Vec<Expr>,
-    ) -> Result<()> {
-        self.resolve_expr(callee)?;
+    fn visit_call_expr(&mut self, callee: &Expr, _paren: &Token, arguments: &Vec<Expr>) {
+        self.resolve_expr(callee);
         for arg in arguments {
-            self.resolve_expr(arg)?;
+            self.resolve_expr(arg);
         }
-        Ok(())
     }
 
-    fn visit_get_expr(&mut self, expr: &Expr, _name: &Token) -> Result<()> {
+    fn visit_get_expr(&mut self, expr: &Expr, _name: &Token) {
         self.resolve_expr(expr)
     }
 
-    fn visit_grouping_expr(&mut self, expr: &Expr) -> Result<()> {
+    fn visit_grouping_expr(&mut self, expr: &Expr) {
         self.resolve_expr(expr)
     }
 
-    fn visit_literal_expr(&mut self, _: &LiteralValue) -> Result<()> {
-        Ok(())
-    }
+    fn visit_literal_expr(&mut self, _: &LiteralValue) {}
 
-    fn visit_logical_expr(&mut self, left: &Expr, _op: &Token, right: &Expr) -> Result<()> {
-        self.resolve_expr(left)?;
+    fn visit_logical_expr(&mut self, left: &Expr, _op: &Token, right: &Expr) {
+        self.resolve_expr(left);
         self.resolve_expr(right)
     }
 
-    fn visit_set_expr(&mut self, ojbect: &Expr, _name: &Token, value: &Expr) -> Result<()> {
-        self.resolve_expr(value)?;
+    fn visit_set_expr(&mut self, ojbect: &Expr, _name: &Token, value: &Expr) {
+        self.resolve_expr(value);
         self.resolve_expr(ojbect)
     }
 
-    fn visit_super_expr(&mut self, keyword: &Token, _method: &Token) -> Result<()> {
+    fn visit_super_expr(&mut self, keyword: &Token, _method: &Token) {
         match self.current_class {
-            ClassType::None => Err(anyhow!("Cannot use 'super' outside of a class")),
-            ClassType::SubClass => Ok(self.resolve_local(keyword)),
-            _ => Err(anyhow!("Can't use 'super' in a class with no superclass.")),
+            ClassType::None => self.error(keyword, "Can't use 'super' outside of a class."),
+            ClassType::SubClass => self.resolve_local(keyword),
+            _ => self.error(keyword, "Can't use 'super' in a class with no superclass."),
         }
     }
 
-    fn visit_this_expr(&mut self, keyword: &Token) -> Result<()> {
+    fn visit_this_expr(&mut self, keyword: &Token) {
         if self.current_class == ClassType::None {
-            return Err(anyhow!("Cannot use 'this' outside of a class"));
+            return self.error(keyword, "Can't use 'this' outside of a class.");
         }
 
         self.resolve_local(keyword);
-        Ok(())
     }
 
-    fn visit_unary_expr(&mut self, _op: &Token, right: &Expr) -> Result<()> {
+    fn visit_unary_expr(&mut self, _op: &Token, right: &Expr) {
         self.resolve_expr(right)
     }
 
     fn resolve_local(&mut self, name: &Token) {
         for (i, scope) in self.scopes.iter().enumerate().rev() {
             if scope.contains_key(&name.lexeme) {
-                self.interpreter.resolve(name, self.scopes.len() - 1 - i);
+                return self.interpreter.resolve(name, self.scopes.len() - 1 - i);
             }
         }
+    }
+
+    fn error(&mut self, token: &Token, message: &str) {
+        match token.token_type {
+            TokenType::Eof => eprintln!("[line {}] Error at end: {}", token.line, message),
+            _ => eprintln!("[line {}] Error at '{}': {}", token.line, token.lexeme, message),
+        }
+        self.had_error = true;
     }
 }

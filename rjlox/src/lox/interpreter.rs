@@ -1,6 +1,3 @@
-use crate::lox::parser::{Expr, Stmt};
-use crate::lox::scanner::{LiteralValue, Token, TokenType};
-
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
@@ -10,9 +7,11 @@ use std::time;
 use anyhow::{anyhow, Result};
 use thiserror::Error;
 
-use super::parser;
+use crate::lox::parser;
+use crate::lox::parser::{Expr, Stmt};
+use crate::lox::scanner::{LiteralValue, Token, TokenType};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Object {
     String(String),
     Number(f64),
@@ -20,6 +19,20 @@ pub enum Object {
     Callable(LoxCallable),
     Instance(Rc<RefCell<LoxInstance>>),
     Nil,
+}
+
+impl PartialEq for Object {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Object::String(s1), Object::String(s2)) => s1 == s2,
+            (Object::Number(n1), Object::Number(n2)) => n1 == n2,
+            (Object::Boolean(b1), Object::Boolean(b2)) => b1 == b2,
+            (Object::Callable(c1), Object::Callable(c2)) => c1 == c2,
+            (Object::Instance(i1), Object::Instance(i2)) => Rc::ptr_eq(i1, i2),
+            (Object::Nil, Object::Nil) => true,
+            _ => false,
+        }
+    }
 }
 
 impl Display for Object {
@@ -89,11 +102,19 @@ impl NativeFunction {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 struct LoxFunction {
     declaration: parser::Function,
     closure: Rc<RefCell<Environment>>,
     is_initializer: bool,
+}
+
+impl PartialEq for LoxFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.declaration == other.declaration &&
+            self.is_initializer == other.is_initializer &&
+            Rc::ptr_eq(&self.closure, &other.closure)
+    }
 }
 
 impl Display for LoxFunction {
@@ -116,7 +137,13 @@ impl Call for LoxFunction {
 
         let result = interpreter.execute_block(&self.declaration.body, environment);
         match result {
-            Ok(_) => Ok(Object::Nil),
+            Ok(_) => {
+                if self.is_initializer {
+                    Ok(RefCell::borrow(&self.closure).get_at(0, "this")?)
+                } else {
+                    Ok(Object::Nil)
+                }
+            }
             Err(e) => match e.downcast_ref() {
                 Some(Return(obj)) => {
                     if self.is_initializer {
@@ -194,11 +221,22 @@ impl LoxClass {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum LoxCallable {
     NativeFunction(NativeFunction),
     LoxFunction(LoxFunction),
     LoxClass(Rc<LoxClass>),
+}
+
+impl PartialEq for LoxCallable {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (LoxCallable::NativeFunction(n1), LoxCallable::NativeFunction(n2)) => n1 == n2,
+            (LoxCallable::LoxFunction(l1), LoxCallable::LoxFunction(l2)) => l1 == l2,
+            (LoxCallable::LoxClass(c1), LoxCallable::LoxClass(c2)) => Rc::ptr_eq(c1, c2),
+            _ => false,
+        }
+    }
 }
 
 impl Display for LoxCallable {
@@ -246,16 +284,14 @@ impl LoxInstance {
         LoxInstance { klass, fields: HashMap::new() }
     }
 
-    pub fn get(&self, name: &Token) -> Result<Object> {
+    pub fn get(&self, me: &Rc<RefCell<Self>>, name: &Token) -> Result<Object> {
         if let Some(field) = self.fields.get(&name.lexeme) {
             Ok(field.clone())
         } else if let Some(LoxCallable::LoxFunction(method)) = self.klass.find_method(&name.lexeme)
         {
-            Ok(Object::Callable(LoxCallable::LoxFunction(
-                method.bind(&Rc::new(RefCell::new(self.clone()))),
-            )))
+            Ok(Object::Callable(LoxCallable::LoxFunction(method.bind(&Rc::clone(me)))))
         } else {
-            Err(anyhow!("Undefined property '{}'.", name.lexeme))
+            Err(error(name, format!("Undefined property '{}'.", name.lexeme).as_str()))
         }
     }
 
@@ -290,7 +326,7 @@ impl Environment {
         } else if let Some(enclosing) = &self.enclosing {
             RefCell::borrow_mut(&enclosing).assign(name, value)
         } else {
-            Err(anyhow!("Undefined variable '{}'.", name.lexeme))
+            Err(error(name, format!("Undefined variable '{}'.", name.lexeme).as_str()))
         }
     }
 
@@ -300,7 +336,7 @@ impl Environment {
         } else if let Some(enclosing) = &self.enclosing {
             enclosing.as_ref().borrow().get(name)
         } else {
-            Err(anyhow!("Undefined variable '{}'.", name.lexeme))
+            Err(error(name, format!("Undefined variable '{}'.", name.lexeme).as_str()))
         }
     }
 
@@ -310,14 +346,14 @@ impl Environment {
                 .values
                 .get(name)
                 .map(|v| v.clone())
-                .ok_or_else(|| anyhow!("Undefined variable '{}'.", name));
+                .ok_or_else(|| anyhow::anyhow!("Undefined variable '{}'.", name));
         }
         self.ancestor(distance)
             .borrow()
             .values
             .get(name)
             .map(|v| v.clone())
-            .ok_or_else(|| anyhow!("Undefined variable '{}'.", name))
+            .ok_or_else(|| anyhow::anyhow!("Undefined variable '{}'.", name))
     }
 
     fn assign_at(&mut self, distance: usize, name: &Token, value: Object) -> Result<()> {
@@ -326,7 +362,7 @@ impl Environment {
                 self.values.insert(name.lexeme.clone(), value);
                 Ok(())
             } else {
-                Err(anyhow!("Undefined variable '{}'.", name.lexeme))
+                Err(error(name, format!("Undefined variable '{}'.", name.lexeme).as_str()))
             }
         } else {
             let anc = self.ancestor(distance);
@@ -334,7 +370,7 @@ impl Environment {
                 RefCell::borrow_mut(&anc).values.insert(name.lexeme.clone(), value);
                 Ok(())
             } else {
-                Err(anyhow!("Undefined variable '{}'.", name.lexeme))
+                Err(error(name, format!("Undefined variable '{}'.", name.lexeme).as_str()))
             }
         }
     }
@@ -355,6 +391,10 @@ struct Return(Object);
 
 unsafe impl Send for Return {}
 unsafe impl Sync for Return {}
+
+fn error(token: &Token, message: &str) -> anyhow::Error {
+    anyhow!("{}\n[line {}]", message, token.line)
+}
 
 pub struct Interpreter {
     globals: Rc<RefCell<Environment>>,
@@ -389,7 +429,10 @@ impl Interpreter {
 
     pub fn interpret(&mut self, statements: Vec<Stmt>) -> Result<()> {
         for statement in &statements {
-            self.execute(statement)?;
+            if let Err(error) = self.execute(statement) {
+                eprintln!("{}", error);
+                return Err(anyhow!("Runtime error"));
+            }
         }
         Ok(())
     }
@@ -512,7 +555,7 @@ impl Interpreter {
             {
                 my_super = Some(superclass);
             } else {
-                return Err(anyhow!("Superclass must be a class."));
+                return Err(error(name, "Superclass must be a class."));
             }
         }
 
@@ -600,24 +643,23 @@ impl Interpreter {
             }
 
             if args.len() != callee.arity() {
-                return Err(anyhow!(
-                    "Expected {} arguments but got {}.",
-                    callee.arity(),
-                    args.len()
+                return Err(error(
+                    paren,
+                    &format!("Expected {} arguments but got {}.", callee.arity(), args.len()),
                 ));
             }
 
             callee.call(self, &args)
         } else {
-            Err(anyhow!("Line {}: Can only call functions and classes: {}", paren.line, callee))
+            Err(error(paren, "Can only call functions and classes."))
         }
     }
 
     fn visit_get_expr(&mut self, expr: &Expr, name: &Token) -> Result<Object> {
         if let Object::Instance(instance) = self.evaluate(expr)? {
-            return instance.borrow().get(name);
+            return instance.borrow().get(&instance, name);
         }
-        Err(anyhow!("Only instances have properties."))
+        Err(error(name, "Only instances have properties."))
     }
 
     fn visit_set_expr(&mut self, object: &Expr, name: &Token, value: &Expr) -> Result<Object> {
@@ -626,7 +668,7 @@ impl Interpreter {
             RefCell::borrow_mut(&instance).set(&name, value.clone());
             return Ok(value);
         }
-        Err(anyhow!("Only instances have fields."))
+        Err(error(name, "Only instances have fields."))
     }
 
     fn visit_super_expr(&mut self, keyword: &Token, method: &Token) -> Result<Object> {
@@ -647,7 +689,7 @@ impl Interpreter {
             }
         }
 
-        Err(anyhow!("Undefined property '{}'.", method.lexeme))
+        Err(error(method, format!("Undefined property '{}'.", method.lexeme).as_str()))
     }
 
     fn visit_grouping_expr(&mut self, expr: &Expr) -> Result<Object> {
@@ -668,7 +710,7 @@ impl Interpreter {
                 }
             }
             _ => {
-                return Err(anyhow!("visit_logical_expr: unknown logical operator: {}", op.lexeme))
+                return Err(error(op, "visit_logical_expr: unknown logical operator"));
             }
         }
 
@@ -682,11 +724,11 @@ impl Interpreter {
                 if let Object::Number(num) = right {
                     Ok(Object::Number(-num))
                 } else {
-                    Err(anyhow!("visit_unary_expr: right is not a Number: {}", right))
+                    Err(error(op, "Operand must be a number."))
                 }
             }
             TokenType::Bang => Ok(Object::Boolean(!right.is_truthy())),
-            _ => Err(anyhow!("visit_unary_expr: unknown unary operator: {}", op.lexeme)),
+            _ => Err(error(op, "visit_unary_expr: unknown unary operator")),
         }
     }
 
@@ -699,33 +741,21 @@ impl Interpreter {
                 if let (Object::Number(left), Object::Number(right)) = (&left, &right) {
                     Ok(Object::Number(left - right))
                 } else {
-                    Err(anyhow!(
-                        "visit_binary_expr: left or right is not a Number: {} - {}",
-                        left,
-                        right
-                    ))
+                    Err(error(op, "Operands must be numbers."))
                 }
             }
             TokenType::Slash => {
                 if let (Object::Number(left), Object::Number(right)) = (&left, &right) {
                     Ok(Object::Number(left / right))
                 } else {
-                    Err(anyhow!(
-                        "visit_binary_expr: left or right is not a Number: {} / {}",
-                        left,
-                        right
-                    ))
+                    Err(error(op, "Operands must be numbers."))
                 }
             }
             TokenType::Star => {
                 if let (Object::Number(left), Object::Number(right)) = (&left, &right) {
                     Ok(Object::Number(left * right))
                 } else {
-                    Err(anyhow!(
-                        "visit_binary_expr: left or right is not a Number: {} * {}",
-                        left,
-                        right
-                    ))
+                    Err(error(op, "Operands must be numbers."))
                 }
             }
             TokenType::Plus => {
@@ -734,60 +764,40 @@ impl Interpreter {
                 } else if let (Object::String(left), Object::String(right)) = (&left, &right) {
                     Ok(Object::String(format!("{}{}", left, right)))
                 } else {
-                    Err(anyhow!(
-                        "visit_binary_expr: left or right is not a Number or String: {} + {}",
-                        left,
-                        right
-                    ))
+                    Err(error(op, "Operands must be two numbers or two strings."))
                 }
             }
             TokenType::Greater => {
                 if let (Object::Number(left), Object::Number(right)) = (&left, &right) {
                     Ok(Object::Boolean(left > right))
                 } else {
-                    Err(anyhow!(
-                        "visit_binary_expr: left or right is not a Number: {} > {}",
-                        left,
-                        right
-                    ))
+                    Err(error(op, "Operands must be numbers."))
                 }
             }
             TokenType::GreaterEqual => {
                 if let (Object::Number(left), Object::Number(right)) = (&left, &right) {
                     Ok(Object::Boolean(left >= right))
                 } else {
-                    Err(anyhow!(
-                        "visit_binary_expr: left or right is not a Number: {} >= {}",
-                        left,
-                        right
-                    ))
+                    Err(error(op, "Operands must be numbers."))
                 }
             }
             TokenType::Less => {
                 if let (Object::Number(left), Object::Number(right)) = (&left, &right) {
                     Ok(Object::Boolean(left < right))
                 } else {
-                    Err(anyhow!(
-                        "visit_binary_expr: left or right is not a Number: {} < {}",
-                        left,
-                        right
-                    ))
+                    Err(error(op, "Operands must be numbers."))
                 }
             }
             TokenType::LessEqual => {
                 if let (Object::Number(left), Object::Number(right)) = (&left, &right) {
                     Ok(Object::Boolean(left <= right))
                 } else {
-                    Err(anyhow!(
-                        "visit_binary_expr: left or right is not a Number: {} <= {}",
-                        left,
-                        right
-                    ))
+                    Err(error(op, "Operands must be numbers."))
                 }
             }
             TokenType::BangEqual => Ok(Object::Boolean(left != right)),
             TokenType::EqualEqual => Ok(Object::Boolean(left == right)),
-            _ => Err(anyhow!("visit_binary_expr: unknown binary operator: {}", op.lexeme)),
+            _ => Err(error(op, "visit_binary_expr: unknown binary operator")),
         }
     }
 

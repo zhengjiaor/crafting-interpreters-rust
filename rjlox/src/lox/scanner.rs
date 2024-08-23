@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use lazy_static::lazy_static;
-use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TokenType {
@@ -57,24 +56,24 @@ pub enum TokenType {
 }
 
 lazy_static! {
-    static ref KEYWORDS: HashMap<&'static str, TokenType> = {
+    static ref KEYWORDS: HashMap<String, TokenType> = {
         let mut m = HashMap::new();
-        m.insert("and", TokenType::And);
-        m.insert("class", TokenType::Class);
-        m.insert("else", TokenType::Else);
-        m.insert("false", TokenType::False);
-        m.insert("for", TokenType::For);
-        m.insert("fun", TokenType::Fun);
-        m.insert("if", TokenType::If);
-        m.insert("nil", TokenType::Nil);
-        m.insert("or", TokenType::Or);
-        m.insert("print", TokenType::Print);
-        m.insert("return", TokenType::Return);
-        m.insert("super", TokenType::Super);
-        m.insert("this", TokenType::This);
-        m.insert("true", TokenType::True);
-        m.insert("var", TokenType::Var);
-        m.insert("while", TokenType::While);
+        m.insert("and".to_string(), TokenType::And);
+        m.insert("class".to_string(), TokenType::Class);
+        m.insert("else".to_string(), TokenType::Else);
+        m.insert("false".to_string(), TokenType::False);
+        m.insert("for".to_string(), TokenType::For);
+        m.insert("fun".to_string(), TokenType::Fun);
+        m.insert("if".to_string(), TokenType::If);
+        m.insert("nil".to_string(), TokenType::Nil);
+        m.insert("or".to_string(), TokenType::Or);
+        m.insert("print".to_string(), TokenType::Print);
+        m.insert("return".to_string(), TokenType::Return);
+        m.insert("super".to_string(), TokenType::Super);
+        m.insert("this".to_string(), TokenType::This);
+        m.insert("true".to_string(), TokenType::True);
+        m.insert("var".to_string(), TokenType::Var);
+        m.insert("while".to_string(), TokenType::While);
         m
     };
 }
@@ -121,30 +120,31 @@ impl Token {
     }
 }
 
-#[derive(Error, Debug)]
-#[error("Scan error: {message} at line {line}")]
-struct ScanError {
-    message: String,
-    line: usize,
-}
-
 pub struct Scanner {
-    source: String,
+    source: Vec<char>,
     tokens: Vec<Token>,
     start: usize,
     current: usize,
     line: usize,
+    pub had_error: bool,
 }
 
 impl Scanner {
     pub fn new(source: String) -> Scanner {
-        Scanner { source, tokens: Vec::new(), start: 0, current: 0, line: 1 }
+        Scanner {
+            source: source.chars().collect(),
+            tokens: Vec::new(),
+            start: 0,
+            current: 0,
+            line: 1,
+            had_error: false,
+        }
     }
 
-    pub fn scan_tokens(mut self) -> Result<Vec<Token>> {
+    pub fn scan_tokens(&mut self) -> Result<Vec<Token>> {
         while !self.is_at_end() {
             self.start = self.current;
-            self.scan_token()?;
+            self.scan_token();
         }
         self.tokens.push(Token::new(
             TokenType::Eof,
@@ -154,14 +154,14 @@ impl Scanner {
             self.tokens.len(),
         ));
 
-        Ok(self.tokens)
+        Ok(self.tokens.clone())
     }
 
     fn is_at_end(&self) -> bool {
         self.current >= self.source.len()
     }
 
-    fn scan_token(&mut self) -> Result<()> {
+    fn scan_token(&mut self) {
         let c = self.advance();
         match c {
             '(' => self.add_token(TokenType::LeftParen),
@@ -208,24 +208,18 @@ impl Scanner {
                 self.line += 1;
             }
             '"' => {
-                self.string()?;
+                self.string();
             }
             d if d.is_ascii_digit() => {
-                self.number()?;
+                self.number();
             }
             a if a.is_ascii_alphabetic() || a == '_' => {
                 self.identifier();
             }
             _ => {
-                return Err(ScanError {
-                    message: format!("Unexpected character: {}", c),
-                    line: self.line,
-                }
-                .into());
+                self.error("Unexpected character.", self.line);
             }
         };
-
-        Ok(())
     }
 
     fn match_next(&mut self, expected: char) -> bool {
@@ -233,7 +227,7 @@ impl Scanner {
             return false;
         }
 
-        let next = self.source.chars().nth(self.current).unwrap();
+        let next = self.source[self.current];
         if next != expected {
             return false;
         }
@@ -245,24 +239,24 @@ impl Scanner {
     fn advance(&mut self) -> char {
         let current = self.current;
         self.current += 1;
-        self.source.chars().nth(current).unwrap()
+        self.source[current]
     }
 
     fn peek(&self) -> char {
         if self.is_at_end() {
             return '\0';
         }
-        self.source.chars().nth(self.current).unwrap()
+        self.source[self.current]
     }
 
     fn peek_next(&self) -> char {
         if self.current + 1 >= self.source.len() {
             return '\0';
         }
-        self.source.chars().nth(self.current + 1).unwrap()
+        self.source[self.current + 1]
     }
 
-    fn string(&mut self) -> Result<()> {
+    fn string(&mut self) {
         while self.peek() != '"' && !self.is_at_end() {
             if self.peek() == '\n' {
                 self.line += 1;
@@ -271,21 +265,19 @@ impl Scanner {
         }
 
         if self.is_at_end() {
-            return Err(
-                ScanError { message: "Unterminated String".to_string(), line: self.line }.into()
-            );
+            self.error("Unterminated string.", self.line);
+            return;
         }
 
         // The closing ".
         self.advance();
 
         // Trim the surrounding quotes.
-        let value = self.source[self.start + 1..self.current - 1].to_string();
+        let value = self.source[self.start + 1..self.current - 1].iter().collect();
         self.add_token_literal(TokenType::String, Some(LiteralValue::String(value)));
-        Ok(())
     }
 
-    fn number(&mut self) -> Result<()> {
+    fn number(&mut self) {
         while self.peek().is_ascii_digit() {
             self.advance();
         }
@@ -299,9 +291,12 @@ impl Scanner {
             }
         }
 
-        let number = self.source[self.start..self.current].parse::<f64>()?;
+        let number = self.source[self.start..self.current]
+            .iter()
+            .collect::<String>()
+            .parse::<f64>()
+            .unwrap_or(0.0);
         self.add_token_literal(TokenType::Number, Some(LiteralValue::Number(number)));
-        Ok(())
     }
 
     fn identifier(&mut self) {
@@ -309,8 +304,8 @@ impl Scanner {
             self.advance();
         }
 
-        let text = &self.source[self.start..self.current];
-        match KEYWORDS.get(text) {
+        let text = self.source[self.start..self.current].iter().collect::<String>();
+        match KEYWORDS.get(&text) {
             Some(token_type) => self.add_token(token_type.clone()),
             None => self.add_token(TokenType::Identifier),
         }
@@ -321,7 +316,12 @@ impl Scanner {
     }
 
     fn add_token_literal(&mut self, token_type: TokenType, literal: Option<LiteralValue>) {
-        let text = self.source[self.start..self.current].to_string();
+        let text = self.source[self.start..self.current].iter().collect();
         self.tokens.push(Token::new(token_type, text, literal, self.line, self.tokens.len()));
+    }
+
+    fn error(&mut self, message: &str, line: usize) {
+        eprintln!("[line {}] Error: {}", line, message);
+        self.had_error = true;
     }
 }

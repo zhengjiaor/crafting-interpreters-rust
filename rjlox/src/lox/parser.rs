@@ -1,8 +1,8 @@
 use std::fmt::Display;
 
-use crate::lox::scanner::{LiteralValue, Token, TokenType};
+use anyhow::{anyhow, Result};
 
-use anyhow::{Error, Result};
+use crate::lox::scanner::{LiteralValue, Token, TokenType};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
@@ -67,27 +67,25 @@ impl Parser {
 
     pub fn parse(&mut self) -> Result<Vec<Stmt>> {
         let mut statements = Vec::<Stmt>::new();
-        let mut errors = Vec::<Error>::new();
+        let mut had_error = false;
         while !self.is_at_end() {
-            let statement = self.declaration();
-            match statement {
+            match self.declaration() {
                 Ok(stmt) => statements.push(stmt),
-                Err(err) => {
-                    errors.push(err);
-                    self.synchronize();
+                Err(_) => {
+                    had_error = true;
                 }
             }
         }
 
-        if errors.is_empty() {
-            Ok(statements)
+        if had_error {
+            Err(anyhow!("Parse error."))
         } else {
-            Err(anyhow::anyhow!("Parse errors: {:#?}", errors))
+            Ok(statements)
         }
     }
 
     fn declaration(&mut self) -> Result<Stmt> {
-        if self.match_type(&[TokenType::Fun]) {
+        let result = if self.match_type(&[TokenType::Fun]) {
             self.function(FunctionType::Function)
         } else if self.match_type(&[TokenType::Class]) {
             self.class_declaration()
@@ -95,6 +93,14 @@ impl Parser {
             self.var_declaration()
         } else {
             self.statement()
+        };
+
+        match result {
+            Ok(stmt) => Ok(stmt),
+            Err(e) => {
+                self.synchronize();
+                Err(e)
+            }
         }
     }
 
@@ -107,7 +113,7 @@ impl Parser {
         if !self.check(TokenType::RightParen) {
             loop {
                 if params.len() >= 255 {
-                    return Err(self.error(self.peek(), "Cannot have more than 255 parameters."));
+                    return Err(self.error(self.peek(), "Can't have more than 255 parameters."));
                 }
 
                 params.push(self.consume(TokenType::Identifier, "Expect parameter name.")?.clone());
@@ -190,7 +196,7 @@ impl Parser {
             Some(self.expression_statement()?)
         };
 
-        let condition = if self.check(TokenType::Semicolon) {
+        let condition = if self.match_type(&[TokenType::Semicolon]) {
             Expr::Literal(LiteralValue::True)
         } else {
             let cond = self.expression()?;
@@ -408,7 +414,7 @@ impl Parser {
         if !self.check(TokenType::RightParen) {
             loop {
                 if arguments.len() >= 255 {
-                    return Err(self.error(self.peek(), "Cannot have more than 255 arguments."));
+                    return Err(self.error(self.peek(), "Can't have more than 255 arguments."));
                 }
 
                 arguments.push(self.expression()?);
@@ -506,13 +512,6 @@ impl Parser {
         }
     }
 
-    fn error(&self, token: &Token, message: &str) -> Error {
-        match token.token_type {
-            TokenType::Eof => anyhow::anyhow!("Line: {}: at end: {}", token.line, message),
-            _ => anyhow::anyhow!("Line: {}: at '{}': {}", token.line, token.lexeme, message),
-        }
-    }
-
     fn synchronize(&mut self) {
         self.advance();
 
@@ -537,5 +536,13 @@ impl Parser {
 
             self.advance();
         }
+    }
+
+    fn error(&self, token: &Token, message: &str) -> anyhow::Error {
+        match token.token_type {
+            TokenType::Eof => eprintln!("[line {}] Error at end: {}", token.line, message),
+            _ => eprintln!("[line {}] Error at '{}': {}", token.line, token.lexeme, message),
+        }
+        anyhow!("Parse error.")
     }
 }
