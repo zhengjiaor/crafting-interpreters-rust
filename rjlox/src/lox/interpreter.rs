@@ -12,7 +12,7 @@ use crate::lox::parser::{Expr, Stmt};
 use crate::lox::scanner::{LiteralValue, Token, TokenType};
 
 #[derive(Clone, Debug)]
-pub enum Object {
+enum Object {
     String(String),
     Number(f64),
     Boolean(bool),
@@ -258,7 +258,7 @@ impl LoxCallable {
         }
     }
 
-    pub fn call(&self, interpreter: &mut Interpreter, arguments: &Vec<Object>) -> Result<Object> {
+    fn call(&self, interpreter: &mut Interpreter, arguments: &Vec<Object>) -> Result<Object> {
         match self {
             LoxCallable::NativeFunction(func) => Ok((func.function)(arguments)),
             LoxCallable::LoxFunction(func) => func.call(interpreter, arguments),

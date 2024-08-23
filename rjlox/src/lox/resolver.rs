@@ -52,7 +52,7 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    pub fn resolve_stmts(&mut self, statements: &Vec<Stmt>) {
+    fn resolve_stmts(&mut self, statements: &Vec<Stmt>) {
         for statement in statements {
             self.resolve_stmt(statement);
         }
@@ -93,17 +93,13 @@ impl<'a> Resolver<'a> {
     fn resolve_function(&mut self, func: &parser::Function, func_type: FunctionType) {
         let enclosing_function = self.current_function;
         self.current_function = func_type;
-
-        let result = || -> Result<()> {
-            self.begin_scope();
-            for param in &func.params {
-                self.declare(param);
-                self.define(param);
-            }
-            self.resolve_stmts(&func.body);
-            self.end_scope();
-            Ok(())
-        }();
+        self.begin_scope();
+        for param in &func.params {
+            self.declare(param);
+            self.define(param);
+        }
+        self.resolve_stmts(&func.body);
+        self.end_scope();
         self.current_function = enclosing_function;
     }
 
