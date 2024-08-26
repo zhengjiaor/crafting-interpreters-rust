@@ -13,4 +13,5 @@ members = [
     "ch13",
     "rjlox",
     "ch14",
+    "ch15",
 ]
